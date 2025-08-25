@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync } from "node:fs";
+import fs from "fs/promises";
 import path from "node:path";
 import express from "express";
 import cors from "cors";
@@ -13,16 +14,43 @@ if (!existsSync(dataDir)) {
 }
 
 // --- Logging and Utility Functions ---
-const log = async (id, name, data, error) => {
+const logQueue = [];
+let isWriting = false;
+
+const processQueue = async () => {
+    if (isWriting || logQueue.length === 0) return;
+    isWriting = true;
+
+    const { filePath, content } = logQueue.shift();
+    try {
+        await fs.appendFile(filePath, content);
+    } catch (err) {
+        console.error("Failed to write log:", err);
+    } finally {
+        isWriting = false;
+        processQueue(); // process next item
+    }
+};
+
+export const log = async (id, name, data, error) => {
     const timestamp = new Date().toLocaleString();
     const identifier = `(${name}#${id})`;
+
+    let filePath, content;
+
     if (error) {
         console.error(`[${timestamp}] ${identifier} ${data}:`, error);
-        appendFileSync(path.join(dataDir, `errors.log`), `[${timestamp}] ${identifier} ${data}: ${error.stack || error.message}\n`);
+        filePath = path.join(dataDir, "errors.log");
+        content = `[${timestamp}] ${identifier} ${data}: ${error.stack || error.message}\n`;
     } else {
         console.log(`[${timestamp}] ${identifier} ${data}`);
-        appendFileSync(path.join(dataDir, `logs.log`), `[${timestamp}] ${identifier} ${data}\n`);
-    };
+        filePath = path.join(dataDir, "logs.log");
+        content = `[${timestamp}] ${identifier} ${data}\n`;
+    }
+
+    // Push to queue and trigger processing
+    logQueue.push({ filePath, content });
+    processQueue();
 };
 
 const duration = (durationMs) => {
