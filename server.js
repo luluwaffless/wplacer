@@ -715,6 +715,13 @@ class TemplateManager {
                             continue;
                         }
                         if (this.pixelsRemaining === 0) {
+                            if (this.antiGriefMode) {
+                                this.status = "Monitoring for changes.";
+                                log('SYSTEM', 'wplacer', `[${this.name}] ✅ All passes complete. Monitoring... Checking again in ${duration(currentSettings.antiGriefStandby)}.`);
+                                await this.cancellableSleep(currentSettings.antiGriefStandby);
+                                continue;
+                            }
+                            
                             log('SYSTEM', 'wplacer', `[${this.name}] ✅ All passes complete! Template finished!`);
                             this.status = "Finished.";
                             this.running = false;
@@ -807,16 +814,6 @@ class TemplateManager {
                     }
                 }
                 if (!this.running) break;
-                if (this.antiGriefMode) {
-                    this.status = "Monitoring for changes.";
-                    log('SYSTEM', 'wplacer', `[${this.name}] 🖼 All passes complete. Monitoring... Checking again in ${duration(currentSettings.antiGriefStandby)}.`);
-                    await this.cancellableSleep(currentSettings.antiGriefStandby);
-                    continue;
-                } else {
-                    log('SYSTEM', 'wplacer', `[${this.name}] 🖼 All passes complete! Template finished!`);
-                    this.status = "Finished.";
-                    this.running = false;
-                }
             }
         } finally {
             activePaintingTasks--;
