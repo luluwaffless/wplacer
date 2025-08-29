@@ -49,6 +49,22 @@ const duration = (durationMs) => {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// START: ADVANCED STEALTH MODE HELPER FUNCTIONS
+const getBellRandomizedValue = (base, min, max, fluctuation) => {
+    const range = fluctuation * 2;
+    const randomFactor = (Math.random() + Math.random()) / 2;
+    const value = base - fluctuation + (randomFactor * range);
+    return Math.max(min, Math.min(max, value));
+};
+
+const getRandomizedCooldown = (baseCooldown, minPercent, maxPercent) => {
+    const min = baseCooldown * (minPercent / 100);
+    const max = baseCooldown * (maxPercent / 100);
+    return Math.floor(Math.random() * (max - min + 1) + min);
+};
+// END: ADVANCED STEALTH MODE HELPER FUNCTIONS
+
+
 // --- WPlacer Core Classes and Constants ---
 class SuspensionError extends Error {
     constructor(message, durationMs) {
@@ -420,8 +436,19 @@ class WPlacer {
             }
             case 'linear': default: break;
         }
+        
         const chargesNow = Math.floor(this.userInfo?.charges?.count ?? 0);
-        const pixelsToPaint = pixelsToProcess.slice(0, chargesNow);
+        let paintCount = chargesNow;
+        if (this.globalSettings.stealthMode) {
+            const { stealthBurstMinPercent, stealthBurstMaxPercent } = this.globalSettings;
+            const burstFactor = (Math.random() * (stealthBurstMaxPercent - stealthBurstMinPercent) + stealthBurstMinPercent) / 100;
+            paintCount = Math.floor(chargesNow * burstFactor);
+            if (paintCount < chargesNow) {
+                log(this.userInfo.id, this.userInfo.name, `[${this.templateName}] 🥷 Stealth Burst: Using ${paintCount}/${chargesNow} charges.`);
+            }
+        }
+        
+        const pixelsToPaint = pixelsToProcess.slice(0, paintCount);
         const bodiesByTile = pixelsToPaint.reduce((acc, p) => {
             const key = `${p.tx},${p.ty}`;
             if (!acc[key]) acc[key] = { colors: [], coords: [] };
@@ -429,8 +456,13 @@ class WPlacer {
             acc[key].coords.push(p.px, p.py);
             return acc;
         }, {});
+
         let totalPainted = 0;
         for (const tileKey in bodiesByTile) {
+            if (this.globalSettings.stealthMode && totalPainted > 0) {
+                const { stealthTileDelayMinMs, stealthTileDelayMaxMs } = this.globalSettings;
+                await sleep(Math.random() * (stealthTileDelayMaxMs - stealthTileDelayMinMs) + stealthTileDelayMinMs);
+            }
             const [tx, ty] = tileKey.split(',').map(Number);
             const body = { ...bodiesByTile[tileKey], t: this.token };
             const result = await this._executePaint(tx, ty, body);
@@ -488,6 +520,17 @@ let currentSettings = {
     keepAliveCooldown: 5000, dropletReserve: 0, antiGriefStandby: 600000,
     drawingDirection: 'ttb', drawingOrder: 'linear', chargeThreshold: 0.5,
     pixelSkip: 1,
+    stealthMode: false,
+    stealthChargeThresholdFluctuation: 10,
+    stealthCooldownMinPercent: 75,
+    stealthCooldownMaxPercent: 125,
+    stealthBurstMinPercent: 85,
+    stealthBurstMaxPercent: 100,
+    stealthBreakChancePercent: 5,
+    stealthBreakMinMinutes: 1,
+    stealthBreakMaxMinutes: 4,
+    stealthTileDelayMinMs: 50,
+    stealthTileDelayMaxMs: 150,
     proxyEnabled: false,
     proxyRotationMode: 'sequential',
     logProxyUsage: false
@@ -618,7 +661,10 @@ class TemplateManager {
             log(wplacer.userInfo.id, wplacer.userInfo.name, `💰 Attempting to buy ${amountToBuy} max charge upgrade(s).`);
             try {
                 await wplacer.buyProduct(70, amountToBuy);
-                await sleep(currentSettings.purchaseCooldown);
+                const cooldown = currentSettings.stealthMode 
+                    ? getRandomizedCooldown(currentSettings.purchaseCooldown, currentSettings.stealthCooldownMinPercent, currentSettings.stealthCooldownMaxPercent) 
+                    : currentSettings.purchaseCooldown;
+                await sleep(cooldown);
                 await wplacer.loadUserInfo();
             } catch (error) {
                 logUserError(error, wplacer.userInfo.id, wplacer.userInfo.name, "purchase max charge upgrades");
@@ -714,12 +760,24 @@ class TemplateManager {
                             this.lastCanvasCheckTimestamp = 0;
                             continue;
                         }
+
                         if (this.pixelsRemaining === 0) {
-                            log('SYSTEM', 'wplacer', `[${this.name}] ✅ All passes complete! Template finished!`);
-                            this.status = "Finished.";
-                            this.running = false;
-                            break;
+                            if (this.antiGriefMode) {
+                                this.status = "Monitoring for changes.";
+                                const standbyTime = currentSettings.stealthMode 
+                                    ? getRandomizedCooldown(currentSettings.antiGriefStandby, currentSettings.stealthCooldownMinPercent, currentSettings.stealthCooldownMaxPercent) 
+                                    : currentSettings.antiGriefStandby;
+                                log('SYSTEM', 'wplacer', `[${this.name}] 🖼 All passes complete. Monitoring... Checking again in ${duration(standbyTime)}.`);
+                                await this.cancellableSleep(standbyTime);
+                                continue; 
+                            } else {
+                                log('SYSTEM', 'wplacer', `[${this.name}] ✅ All passes complete! Template finished!`);
+                                this.status = "Finished.";
+                                this.running = false;
+                                break;
+                            }
                         }
+                        
                         if (passPixelsRemaining === 0) {
                             log('SYSTEM', 'wplacer', `[${this.name}] ✅ Pass (1/${this.currentPixelSkip}) complete.`);
                             passComplete = true;
@@ -754,7 +812,11 @@ class TemplateManager {
                                 }
                             }
                             const predicted = ChargeCache.predict(userId, now);
-                            if (predicted && Math.floor(predicted.count) >= Math.max(1, Math.floor(predicted.max * currentSettings.chargeThreshold))) {
+                            const threshold = currentSettings.stealthMode 
+                                ? getBellRandomizedValue(currentSettings.chargeThreshold, 0.1, 1.0, currentSettings.stealthChargeThresholdFluctuation / 100)
+                                : currentSettings.chargeThreshold;
+
+                            if (predicted && Math.floor(predicted.count) >= Math.max(1, Math.floor(predicted.max * threshold))) {
                                 activeBrowserUsers.add(userId);
                                 const wplacer = new WPlacer(this.template, this.coords, currentSettings, { eraseMode: this.eraseMode, outlineMode: this.outlineMode, skipPaintedPixels: this.skipPaintedPixels }, this.name);
                                 try {
@@ -782,10 +844,46 @@ class TemplateManager {
                         }
                         if (foundUserForTurn) {
                             if (this.running && this.userIds.length > 1) {
-                                log('SYSTEM', 'wplacer', `[${this.name}] ⏱️ Waiting for cooldown (${duration(currentSettings.accountCooldown)}).`);
-                                await sleep(currentSettings.accountCooldown);
+                                const cooldown = currentSettings.stealthMode 
+                                    ? getRandomizedCooldown(currentSettings.accountCooldown, currentSettings.stealthCooldownMinPercent, currentSettings.stealthCooldownMaxPercent) 
+                                    : currentSettings.accountCooldown;
+                                log('SYSTEM', 'wplacer', `[${this.name}] ⏱️ Waiting for cooldown (est. ${duration(cooldown)}).`);
+                                await sleep(cooldown);
+
+                                if (currentSettings.stealthMode && Math.random() < (currentSettings.stealthBreakChancePercent / 100)) {
+                                    const minBreak = currentSettings.stealthBreakMinMinutes * 60 * 1000;
+                                    const maxBreak = currentSettings.stealthBreakMaxMinutes * 60 * 1000;
+                                    const longPause = getRandomizedCooldown( (minBreak + maxBreak) / 2, 75, 125 );
+                                    log('SYSTEM', 'wplacer', `[${this.name}] 🥷 Stealth pause: Taking a longer break for ${duration(longPause)}.`);
+                                    await this.cancellableSleep(longPause);
+                                }
                             }
                         } else {
+                            if (this.canBuyCharges && !activeBrowserUsers.has(this.masterId)) {
+                                activeBrowserUsers.add(this.masterId);
+                                const chargeBuyer = new WPlacer(this.template, this.coords, currentSettings, { eraseMode: this.eraseMode, outlineMode: this.outlineMode, skipPaintedPixels: this.skipPaintedPixels }, this.name);
+                                try {
+                                    await chargeBuyer.login(users[this.masterId].cookies);
+                                    const affordableDroplets = chargeBuyer.userInfo.droplets - currentSettings.dropletReserve;
+                                    if (affordableDroplets >= 500) {
+                                        const amountToBuy = Math.min(Math.ceil(this.pixelsRemaining / 30), Math.floor(affordableDroplets / 500));
+                                        if (amountToBuy > 0) {
+                                            log(this.masterId, this.masterName, `[${this.name}] 💰 Attempting to buy pixel charges...`);
+                                            await chargeBuyer.buyProduct(80, amountToBuy);
+                                            const cooldown = currentSettings.stealthMode 
+                                                ? getRandomizedCooldown(currentSettings.purchaseCooldown, currentSettings.stealthCooldownMinPercent, currentSettings.stealthCooldownMaxPercent)
+                                                : currentSettings.purchaseCooldown;
+                                            await this.sleep(cooldown);
+                                            continue;
+                                        }
+                                    }
+                                } catch (error) {
+                                    logUserError(error, this.masterId, this.masterName, "attempt to buy pixel charges");
+                                } finally {
+                                    activeBrowserUsers.delete(this.masterId);
+                                }
+                            }
+
                             const now = Date.now();
                             const cooldowns = this.userQueue.map(id => {
                                 const p = ChargeCache.predict(id, now);
@@ -793,6 +891,7 @@ class TemplateManager {
                                 const threshold = Math.max(1, Math.floor(p.max * currentSettings.chargeThreshold));
                                 return Math.max(0, (threshold - Math.floor(p.count)) * (p.cooldownMs ?? 30000));
                             });
+                            
                             const waitTime = (cooldowns.length > 0 ? Math.min(...cooldowns) : 60000) + 2000;
                             this.status = "Waiting for charges.";
                             log('SYSTEM', 'wplacer', `[${this.name}] ⏳ No users ready. Waiting ~${duration(waitTime)}.`);
@@ -806,17 +905,9 @@ class TemplateManager {
                         }
                     }
                 }
+                // This part is now unreachable because the logic is handled inside the inner loop.
+                // We keep it just in case the outer loop breaks for other reasons.
                 if (!this.running) break;
-                if (this.antiGriefMode) {
-                    this.status = "Monitoring for changes.";
-                    log('SYSTEM', 'wplacer', `[${this.name}] 🖼 All passes complete. Monitoring... Checking again in ${duration(currentSettings.antiGriefStandby)}.`);
-                    await this.cancellableSleep(currentSettings.antiGriefStandby);
-                    continue;
-                } else {
-                    log('SYSTEM', 'wplacer', `[${this.name}] 🖼 All passes complete! Template finished!`);
-                    this.status = "Finished.";
-                    this.running = false;
-                }
             }
         } finally {
             activePaintingTasks--;
