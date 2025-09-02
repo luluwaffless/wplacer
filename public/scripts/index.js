@@ -70,6 +70,9 @@ const proxyRotationMode = $('proxyRotationMode');
 const proxyCount = $('proxyCount');
 const reloadProxiesBtn = $('reloadProxiesBtn');
 const logProxyUsage = $('logProxyUsage');
+const userSearchInput = $('userSearchInput');
+
+
 
 // --- Global State ---
 let templateUpdateInterval = null;
@@ -790,6 +793,8 @@ selectAllUsers.addEventListener('click', () => {
     document.querySelectorAll('#userSelectList input[type="checkbox"]').forEach((cb) => (cb.checked = true));
 });
 
+
+
 const createToggleButton = (template, id, buttonsContainer, progressBarText, currentPercent) => {
     const button = document.createElement('button');
     button.className = template.running ? 'destructive-button' : 'primary-button';
@@ -929,6 +934,29 @@ const createTemplateCard = (t, id) => {
         }, 100);
     });
     actions.appendChild(editBtn);
+
+    // Search bar
+userSearchInput.addEventListener('input', () => {
+    
+    const searchTerm = userSearchInput.value.toLowerCase();
+
+    const allUserItems = userSelectList.querySelectorAll('.user-select-item');
+
+    allUserItems.forEach(item => {
+        
+        const label = item.querySelector('label');
+
+        if (label) {
+            const userName = label.textContent.toLowerCase();
+
+            if (userName.includes(searchTerm)) {
+                item.style.display = ''; 
+            } else {
+                item.style.display = 'none'; 
+            }
+        }
+    });
+});
 
     const delBtn = document.createElement('button');
     delBtn.className = 'destructive-button';
