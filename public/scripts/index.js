@@ -834,9 +834,18 @@ openManageUsers.addEventListener('click', () => {
             user.className = 'user';
             user.id = `user-${id}`;
 
+            // Nickname logic
+            const nickname = users[id].nickname || '';
+            const displayName = nickname ? nickname : users[id].name;
+            // Pencil SVG (inline for easy styling)
+            const pencilIcon = `<svg class="edit-nickname" width="16" height="16" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M14.69 2.86a2.1 2.1 0 0 1 2.97 2.97l-1.13 1.13-2.97-2.97 1.13-1.13Zm-2.12 2.12 2.97 2.97-8.49 8.49c-.18.18-.4.31-.65.36l-3.3.66a.5.5 0 0 1-.59-.59l.66-3.3c.05-.25.18-.47.36-.65l8.49-8.49Z" fill="#888"/></svg>`;
+
             user.innerHTML = `
                 <div class="user-info">
-                    <span>${users[id].name}</span>
+                    <span class="nickname-container" title="${users[id].name}">
+                        <span class="nickname-text">${displayName}</span>
+                        <span class="edit-pencil" style="cursor:pointer;vertical-align:middle;">${pencilIcon}</span>
+                    </span>
                     <span>(#${id})</span>
                     <div class="user-stats">
                         Charges: <b>?</b>/<b>?</b> | Level <b>?</b> <span class="level-progress">(?%)</span><br>
@@ -847,6 +856,51 @@ openManageUsers.addEventListener('click', () => {
                     <button class="delete-btn" title="Delete User"><img src="icons/remove.svg"></button>
                     <button class="info-btn" title="Get User Info"><img src="icons/code.svg"></button>
                 </div>`;
+
+            // Nickname editing logic
+            const nicknameContainer = user.querySelector('.nickname-container');
+            const nicknameText = user.querySelector('.nickname-text');
+            const editPencil = user.querySelector('.edit-pencil');
+
+            let editing = false;
+            editPencil.addEventListener('click', () => {
+                if (editing) return;
+                editing = true;
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.value = nicknameText.textContent;
+                input.className = 'nickname-input';
+                input.maxLength = 32;
+                nicknameText.replaceWith(input);
+                input.focus();
+                input.select();
+
+                const finishEdit = async () => {
+                    const newNickname = input.value.trim();
+                    if (newNickname !== nickname) {
+                        try {
+                            await axios.put(`/user/${id}/nickname`, { nickname: newNickname });
+                            openManageUsers.click(); // reload list
+                        } catch (error) {
+                            handleError(error);
+                        }
+                    } else {
+                        // revert
+                        input.replaceWith(nicknameText);
+                    }
+                    editing = false;
+                };
+
+                input.addEventListener('blur', finishEdit);
+                input.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') {
+                        input.blur();
+                    } else if (e.key === 'Escape') {
+                        input.replaceWith(nicknameText);
+                        editing = false;
+                    }
+                });
+            });
 
             user.querySelector('.delete-btn').addEventListener('click', () => {
                 showConfirmation(

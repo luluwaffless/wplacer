@@ -1461,8 +1461,9 @@ class TemplateManager {
 
 const app = express();
 app.use(cors());
-app.use(express.static('public'));
 app.use(express.json({ limit: JSON_LIMIT }));
+// Serve static files after all API routes
+app.use(express.static('public'));
 
 // Autostart cache
 const autostartedTemplates = [];
@@ -1630,10 +1631,13 @@ app.post('/user', async (req, res) => {
     const wplacer = new WPlacer({});
     try {
         const userInfo = await wplacer.login(req.body.cookies);
+        // Preserve existing nickname if user is being updated
+        const prev = users[userInfo.id] || {};
         users[userInfo.id] = {
             name: userInfo.name,
             cookies: req.body.cookies,
             expirationDate: req.body.expirationDate,
+            nickname: prev.nickname || '',
         };
         saveUsers();
         res.json(userInfo);
@@ -1641,6 +1645,20 @@ app.post('/user', async (req, res) => {
         logUserError(error, 'NEW_USER', 'N/A', 'add new user');
         res.status(HTTP_STATUS.SRV_ERR).json({ error: error.message });
     }
+})
+
+// Set or update a user's nickname (must be at top-level, not inside another handler)
+
+console.log('Registered: PUT /user/:id/nickname');
+app.put('/user/:id/nickname', (req, res) => {
+    const userId = req.params.id;
+    const { nickname } = req.body || {};
+    if (!userId || !users[userId] || typeof nickname !== 'string') {
+        return res.sendStatus(400);
+    }
+    users[userId].nickname = nickname;
+    saveUsers();
+    res.json({ success: true, nickname });
 });
 
 app.delete('/user/:id', async (req, res) => {
